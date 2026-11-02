@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#111214">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Gym">
+  <title>Gym Tracker</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 id="title">Hoy</h1>
+    <div id="topbar-extra"></div>
+  </header>
+
+  <main id="view"></main>
+
+  <!-- Barra del timer de descanso -->
+  <div id="timerbar" class="timerbar hidden">
+    <button class="tbtn" data-action="timer-add" data-sec="-15">−15</button>
+    <div class="timer-display">
+      <div class="timer-label">Descanso</div>
+      <div id="timer-time" class="timer-time">0:00</div>
+      <div class="timer-progress"><div id="timer-fill"></div></div>
+    </div>
+    <button class="tbtn" data-action="timer-add" data-sec="15">+15</button>
+    <button class="tbtn stop" data-action="timer-stop" aria-label="Parar">✕</button>
+  </div>
+
+  <button id="timer-fab" class="fab" data-action="timer-menu" aria-label="Timer">⏱</button>
+
+  <nav class="tabbar">
+    <button data-tab="hoy" class="active"><span class="ico">🏋️</span><span>Hoy</span></button>
+    <button data-tab="rutinas"><span class="ico">📋</span><span>Rutinas</span></button>
+    <button data-tab="ejercicios"><span class="ico">💪</span><span>Ejercicios</span></button>
+    <button data-tab="calendario"><span class="ico">📅</span><span>Calendario</span></button>
+    <button data-tab="ajustes"><span class="ico">⚙️</span><span>Ajustes</span></button>
+  </nav>
+
+  <!-- Hoja modal reutilizable -->
+  <div id="sheet-backdrop" class="sheet-backdrop hidden" data-action="close-sheet"></div>
+  <section id="sheet" class="sheet hidden" role="dialog" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <div id="sheet-body"></div>
+  </section>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <datalist id="exercise-list"></datalist>
+
+  <script src="app.js"></script>
+</body>
+</html>
