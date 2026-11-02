@@ -4,6 +4,7 @@
    Gym Tracker — PWA local. Todos los datos viven en localStorage.
    ============================================================ */
 
+const APP_VERSION = 5; // súbela junto con CACHE en sw.js
 const STORE_KEY = 'gymtracker.v1';
 const TIMER_KEY = 'gymtracker.timer';
 
@@ -690,7 +691,7 @@ function renderAjustes() {
 
     <div class="section-title">Zona peligrosa</div>
     <button class="btn ghost danger block" data-action="reset">Borrar todos los datos</button>
-    <div class="muted small" style="text-align:center;margin-top:16px">${db.workouts.length} entrenos · ${db.routines.length} rutinas</div>`;
+    <div class="muted small" style="text-align:center;margin-top:16px">${db.workouts.length} entrenos · ${db.routines.length} rutinas · versión ${APP_VERSION}</div>`;
 }
 
 async function exportData() {
@@ -952,7 +953,12 @@ function openTimerMenu() {
 
 setInterval(() => { tick(); updateElapsed(); }, 250);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { tick(); if (db.active) requestWakeLock(); }
+  if (document.visibilityState === 'visible') {
+    tick();
+    if (db.active) requestWakeLock();
+    // iOS deja la app "dormida" en memoria: al volver, mira si hay versión nueva
+    navigator.serviceWorker?.getRegistration().then((r) => r?.update()).catch(() => {});
+  }
 });
 
 /* Mantener la pantalla encendida durante el entreno (si el navegador lo permite) */
@@ -1226,5 +1232,13 @@ tick();
 if (db.active) requestWakeLock();
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('sw.js').then(refreshPushSubscription).catch(() => {});
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(refreshPushSubscription).catch(() => {});
+  // Cuando se instala una versión nueva, recarga para usarla (los datos están a salvo en localStorage)
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;
+    reloading = true;
+    location.reload();
+  });
 }

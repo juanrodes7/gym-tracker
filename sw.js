@@ -1,6 +1,6 @@
 // Service worker: guarda la app en caché para que funcione sin conexión.
 // Sube la versión cada vez que cambies algún archivo para que los móviles se actualicen.
-const CACHE = 'gym-v4';
+const CACHE = 'gym-v5';
 const FILES = [
   './',
   './index.html',
@@ -13,7 +13,10 @@ const FILES = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
+  // cache: 'reload' → descarga los archivos nuevos, sin usar la caché de 10 min de GitHub
+  e.waitUntil(caches.open(CACHE)
+    .then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -27,8 +30,10 @@ self.addEventListener('activate', (e) => {
 // Red primero (para recibir actualizaciones), caché si no hay conexión
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
+  const sameOrigin = new URL(e.request.url).origin === self.location.origin;
   e.respondWith(
-    fetch(e.request)
+    // 'no-cache' = pregunta siempre al servidor si hay versión nueva (si no, responde rápido con 304)
+    fetch(sameOrigin ? new Request(e.request, { cache: 'no-cache' }) : e.request)
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy));
