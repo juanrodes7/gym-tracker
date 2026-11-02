@@ -229,6 +229,15 @@ main {
   background: var(--gold); border-radius: 6px; padding: 2px 6px; margin-left: 6px; vertical-align: 2px;
 }
 
+/* ---------- Correr ---------- */
+.run-ico { width: 1.1em; height: 1.1em; vertical-align: -0.18em; color: var(--brown); }
+.run-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.run-grid input { text-align: center; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.run-pace { min-height: 20px; margin: 8px 4px 10px; font-size: 14px; font-weight: 600; color: var(--accent-strong); font-variant-numeric: tabular-nums; }
+.run-add { margin-top: 10px; }
+.run-add .run-ico { color: inherit; }
+.cal-day.has.run { background: var(--brown); color: var(--on-brown); }
+
 /* ---------- Ejercicios ---------- */
 .ex-row { display: flex; align-items: center; gap: 10px; }
 .ex-row h3 { font-size: 16.5px; }

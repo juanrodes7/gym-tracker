@@ -4,7 +4,7 @@
    Gym Tracker — PWA local. Todos los datos viven en localStorage.
    ============================================================ */
 
-const APP_VERSION = 9; // súbela junto con CACHE en sw.js
+const APP_VERSION = 10; // súbela junto con CACHE en sw.js
 const STORE_KEY = 'gymtracker.v1';
 const TIMER_KEY = 'gymtracker.timer';
 
@@ -33,6 +33,38 @@ const fmtDate = (ts, opts = { weekday: 'long', day: 'numeric', month: 'long' }) 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const fmtTime =(ts) => new Date(ts).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+/* Correr: una carrera es { type: 'run', name: 'Correr', km, time, comment } (time como texto "28:30") */
+const RUN_NAME = 'Correr';
+const RUN_ICON = '<svg class="run-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="15" cy="4.5" r="1.8"/><path d="M7 21l3.5-5.5 3 2.5v3"/><path d="M5 11.5l3.5-3 4.5 1 2.5 3.5 3.5 1"/><path d="M10.5 15.5l2.5-6"/></svg>';
+const isRun = (e) => !!e && e.type === 'run';
+// "28" = 28 min · "28:30" = 28 min 30 s · "1:05:00" = 1 h 5 min → segundos
+function parseDur(str) {
+  const parts = String(str || '').trim().replace(/[.,'´]/g, ':').split(':').filter((x) => x !== '').map(Number);
+  if (!parts.length || parts.some((n) => !Number.isFinite(n))) return null;
+  if (parts.length === 1) return Math.round(parts[0] * 60);
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return parts[0] * 3600 + parts[1] * 60 + parts[2];
+}
+function fmtDur(sec) {
+  if (!sec) return '';
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), ss = Math.round(sec % 60);
+  return h ? `${h}:${pad(m)}:${pad(ss)}` : `${m}:${pad(ss)}`;
+}
+function runPace(e) { const km = num(e.km), sec = parseDur(e.time); return km > 0 && sec ? sec / km : null; }
+function fmtRun(e) {
+  const km = num(e.km), sec = parseDur(e.time), pace = runPace(e);
+  return [km ? `${String(km).replace('.', ',')} km` : '', sec ? fmtDur(sec) : '', pace ? `${fmtClock(pace)} /km` : ''].filter(Boolean).join(' · ');
+}
+const hasRunData = (e) => num(e.km) > 0 || !!parseDur(e.time);
+const newRun = () => ({ type: 'run', name: RUN_NAME, km: '', time: '', comment: '' });
+function lastRun(beforeTs = Infinity) {
+  for (const w of sortedWorkouts()) {
+    if (w.start >= beforeTs) continue;
+    const r = w.exercises.find(isRun);
+    if (r) return { run: r, date: w.start };
+  }
+  return null;
+}
 const fmtSet = (s) => (s.w !== '' && s.w != null ? `${s.w} kg × ${s.r}` : `${s.r} reps`);
 
 /* ---------- Datos ---------- */
@@ -112,8 +144,8 @@ function load() {
 function syncLibrary(d = db) {
   const add = (name, extra) => { const k = norm(name); if (k && !d.library[k]) d.library[k] = { name: name.trim(), ...extra }; };
   d.routines.forEach((r) => r.exercises.forEach((e) => add(e.name, { rest: e.rest, reps: e.reps })));
-  d.workouts.forEach((w) => w.exercises.forEach((e) => add(e.name)));
-  if (d.active) d.active.exercises.forEach((e) => add(e.name));
+  d.workouts.forEach((w) => w.exercises.forEach((e) => { if (!isRun(e)) add(e.name); }));
+  if (d.active) d.active.exercises.forEach((e) => { if (!isRun(e)) add(e.name); });
 }
 
 let db = load();
@@ -165,7 +197,7 @@ function exerciseStats(name) {
   const k = norm(name);
   let sessions = 0, last = null;
   for (const w of db.workouts) {
-    if (w.exercises.some((e) => norm(e.name) === k)) { sessions++; if (!last || w.start > last) last = w.start; }
+    if (w.exercises.some((e) => !isRun(e) && norm(e.name) === k)) { sessions++; if (!last || w.start > last) last = w.start; }
   }
   return { sessions, last, best: bestWeightFor(name) };
 }
@@ -175,7 +207,7 @@ function renameExercise(oldName, newName) {
   const kOld = norm(oldName), kNew = norm(newName);
   newName = newName.trim();
   if (!kNew) return;
-  const fix = (e) => { if (norm(e.name) === kOld) e.name = newName; };
+  const fix = (e) => { if (!isRun(e) && norm(e.name) === kOld) e.name = newName; };
   db.workouts.forEach((w) => w.exercises.forEach(fix));
   db.routines.forEach((r) => r.exercises.forEach(fix));
   if (db.active) db.active.exercises.forEach(fix);
@@ -218,7 +250,7 @@ function lastSetsFor(name, beforeTs = Infinity, gymId = currentGym()) {
   let fallback = null;
   for (const w of sortedWorkouts()) {
     if (w.start >= beforeTs) continue;
-    const ex = w.exercises.find((e) => norm(e.name) === n);
+    const ex = w.exercises.find((e) => !isRun(e) && norm(e.name) === n);
     if (!ex || !ex.sets.length) continue;
     if (w.gymId === gymId) return { sets: ex.sets, date: w.start, gymId: w.gymId, other: false };
     fallback ||= { sets: ex.sets, date: w.start, gymId: w.gymId, other: true };
@@ -235,7 +267,7 @@ function bestWeightFor(name, beforeTs = Infinity, gymId = null) {
     if (gymId && w.gymId !== gymId) continue;
     for (const e of w.exercises) {
       if (norm(e.name) !== n) continue;
-      for (const s of e.sets) { const v = num(s.w); if (v != null && (best == null || v > best)) best = v; }
+      for (const s of e.sets || []) { const v = num(s.w); if (v != null && (best == null || v > best)) best = v; }
     }
   }
   return best;
@@ -315,7 +347,11 @@ function renderHoy() {
   if (hidden && routines.length) {
     html += `<div class="muted small" style="margin:-4px 4px 12px">${hidden} ${hidden === 1 ? 'rutina oculta' : 'rutinas ocultas'} de otros gimnasios</div>`;
   }
-  html += `<button class="btn block" data-action="start-free">＋ Entreno libre</button>`;
+  html += `<div class="card routine-card run-routine">
+      <div class="info"><h3>${RUN_ICON} Correr</h3><p>${(() => { const r = lastRun(); return r ? `Última: ${esc(fmtRun(r.run))}` : 'Apunta distancia, tiempo y cómo ha ido'; })()}</p></div>
+      <button class="btn primary sm" data-action="start-run">Empezar</button>
+    </div>
+    <button class="btn block" data-action="start-free">＋ Entreno libre</button>`;
 
   if (last) {
     html += `<div class="section-title">Último entreno</div>`;
@@ -368,13 +404,26 @@ function addGym() {
   selectGym(g.id);
 }
 
+function workoutSummary(w) {
+  const strength = w.exercises.filter((e) => !isRun(e));
+  const runs = w.exercises.filter(isRun);
+  const parts = [];
+  if (strength.length) {
+    if (multiGym()) parts.push(`${PIN}${esc(gymName(w.gymId))}`);
+    parts.push(plural(strength.length, 'ejercicio'), plural(strength.reduce((a, e) => a + e.sets.length, 0), 'serie'));
+  }
+  runs.forEach((r) => parts.push(`${RUN_ICON} ${esc(fmtRun(r))}`));
+  if (w.end && strength.length) parts.push(fmtDuration(w.end - w.start));
+  return parts.join(' · ');
+}
+
 function workoutCard(w) {
   return `<div class="card" data-action="open-workout" data-id="${w.id}">
     <div class="row between">
       <h3>${esc(w.name)}</h3>
       <span class="muted small">${esc(fmtDate(w.start, { day: 'numeric', month: 'short' }))}</span>
     </div>
-    <div class="muted small">${multiGym() ? `${PIN}${esc(gymName(w.gymId))} · ` : ''}${plural(w.exercises.length, 'ejercicio')} · ${plural(w.exercises.reduce((a, e) => a + e.sets.length, 0), 'serie')}${w.end ? ' · ' + fmtDuration(w.end - w.start) : ''}</div>
+    <div class="muted small">${workoutSummary(w)}</div>
   </div>`;
 }
 
@@ -391,6 +440,7 @@ function renderActive() {
   }
 
   a.exercises.forEach((ex, ei) => {
+    if (isRun(ex)) { html += runCard(ex, ei, a.start); return; }
     const last = lastSetsFor(ex.name, a.start, a.gymId);
     const best = bestWeightFor(ex.name, a.start, a.gymId);
     // Prioridad para proponer pesos: historial de este gimnasio > peso de referencia > otro gimnasio
@@ -439,6 +489,7 @@ function renderActive() {
       <input id="new-ex" list="exercise-list" placeholder="Añadir ejercicio…" enterkeyhint="done" autocomplete="off">
       <button class="btn" data-action="add-ex">Añadir</button>
     </div>
+    ${a.exercises.some(isRun) ? '' : `<button class="btn block run-add" data-action="add-run">${RUN_ICON} Añadir carrera</button>`}
     <div class="stack" style="margin-top:22px">
       <button class="btn ok block" data-action="finish">✔ Terminar entreno</button>
       <button class="btn ghost block danger" data-action="discard">Descartar entreno</button>
@@ -446,7 +497,36 @@ function renderActive() {
   return html;
 }
 
+function runCard(ex, ei, beforeTs) {
+  const prev = lastRun(beforeTs);
+  const pace = runPace(ex);
+  return `<div class="card ex-card run-card">
+    <div class="ex-head">
+      <div class="grow">
+        <button class="ex-name" data-action="run-history">${RUN_ICON} ${esc(ex.name)} ›</button>
+        <div class="ex-last">${prev ? `Última: ${esc(fmtRun(prev.run))} · ${esc(fmtDate(prev.date, { day: 'numeric', month: 'short' }))}` : 'Primera carrera'}</div>
+      </div>
+      <button class="icon-btn" data-action="remove-ex" data-ei="${ei}" aria-label="Quitar">✕</button>
+    </div>
+    <div class="run-grid">
+      <div><label class="field-label">Distancia (km)</label>
+        <input inputmode="decimal" data-run="km" data-ei="${ei}" value="${esc(ex.km)}" placeholder="${esc(prev?.run.km || '5')}"></div>
+      <div><label class="field-label">Tiempo (mm:ss)</label>
+        <input inputmode="text" data-run="time" data-ei="${ei}" value="${esc(ex.time)}" placeholder="${esc(prev?.run.time || '30:00')}"></div>
+    </div>
+    <div class="run-pace" id="pace-${ei}">${pace ? `Ritmo ${fmtClock(pace)} /km` : ''}</div>
+    <textarea class="ex-note" rows="1" data-run="comment" data-ei="${ei}" placeholder="Comentario: ruta, sensaciones, series…">${esc(ex.comment || '')}</textarea>
+  </div>`;
+}
+
 function newSet() { return { w: '', r: '', done: false }; }
+
+function startRun() {
+  db.active = { id: uid(), routineId: 'run', name: RUN_NAME, gymId: currentGym(), start: Date.now(), exercises: [newRun()] };
+  save();
+  requestWakeLock();
+  setTab('hoy');
+}
 
 function startWorkout(routine) {
   db.active = {
@@ -470,10 +550,12 @@ function startWorkout(routine) {
 function finishWorkout() {
   const a = db.active;
   const exercises = a.exercises
-    .map((e) => ({ name: e.name, sets: e.sets.filter((s) => s.done).map((s) => ({ w: s.w, r: s.r })) }))
-    .filter((e) => e.sets.length);
+    .map((e) => (isRun(e)
+      ? { type: 'run', name: e.name, km: e.km, time: e.time, comment: (e.comment || '').trim() }
+      : { name: e.name, sets: e.sets.filter((s) => s.done).map((s) => ({ w: s.w, r: s.r })) }))
+    .filter((e) => (isRun(e) ? hasRunData(e) : e.sets.length));
   if (!exercises.length) {
-    if (confirm('No has marcado ninguna serie como hecha. ¿Descartar el entreno?')) { db.active = null; save(); render(); }
+    if (confirm('No has apuntado nada (ninguna serie hecha ni carrera). ¿Descartar el entreno?')) { db.active = null; save(); render(); }
     return;
   }
   db.workouts.push({ id: a.id, routineId: a.routineId, gymId: a.gymId || currentGym(), name: a.name, start: a.start, end: Date.now(), exercises });
@@ -630,7 +712,8 @@ function renderCalendario() {
   for (let d = 1; d <= days; d++) {
     const k = `${y}-${pad(m + 1)}-${pad(d)}`;
     const has = byDay[k];
-    cells += `<button class="cal-day ${has ? 'has' : ''} ${k === todayK ? 'today' : ''}" data-action="open-day" data-date="${k}">
+    const onlyRun = has && has.every((w) => w.exercises.every(isRun));
+    cells += `<button class="cal-day ${has ? 'has' : ''} ${onlyRun ? 'run' : ''} ${k === todayK ? 'today' : ''}" data-action="open-day" data-date="${k}">
       ${d}${has ? '<span class="dot"></span>' : ''}
     </button>`;
   }
@@ -668,6 +751,13 @@ function workoutDetail(w) {
     </div>
     <div class="muted small" style="margin-bottom:8px">${fmtTime(w.start)}${w.end ? ' · ' + fmtDuration(w.end - w.start) : ''}</div>
     ${w.exercises.map((e) => {
+      if (isRun(e)) {
+        return `<div class="log-ex">
+          <div class="name">${RUN_ICON} ${esc(e.name)}</div>
+          <div class="sets">${esc(fmtRun(e))}</div>
+          ${e.comment ? `<div class="sets" style="white-space:pre-wrap">${esc(e.comment)}</div>` : ''}
+        </div>`;
+      }
       const best = bestWeightFor(e.name, w.start, w.gymId);
       const pr = best != null && e.sets.some((s) => num(s.w) != null && num(s.w) > best);
       return `<div class="log-ex">
@@ -733,7 +823,7 @@ function openExercise(name) {
   name = lib.name;
   const n = norm(name);
   const items = sortedWorkouts()
-    .map((w) => ({ w, ex: w.exercises.find((e) => norm(e.name) === n) }))
+    .map((w) => ({ w, ex: w.exercises.find((e) => !isRun(e) && norm(e.name) === n) }))
     .filter((x) => x.ex);
   // Máximo por gimnasio (las máquinas de cada uno no son comparables)
   const bests = db.gyms.map((g) => ({ g, best: bestWeightFor(name, Infinity, g.id) })).filter((x) => x.best != null);
@@ -765,6 +855,29 @@ function openExercise(name) {
         <div class="row between"><b>${esc(fmtDate(w.start, { day: 'numeric', month: 'short', year: 'numeric' }))}</b><span class="muted small">${multiGym() ? `${PIN}${esc(gymName(w.gymId))} · ` : ''}${esc(w.name)}</span></div>
         <div class="muted small" style="margin-top:2px">${ex.sets.map(fmtSet).map(esc).join(' · ')}</div>
       </div>`).join('')}</div>` : '<div class="empty">Aún no hay historial de este ejercicio.</div>'}`, 'exercise', name);
+}
+
+function openRunHistory() {
+  const runs = sortedWorkouts().flatMap((w) => w.exercises.filter(isRun).map((r) => ({ w, r })));
+  const now = new Date();
+  const monthKm = runs.filter(({ w }) => { const d = new Date(w.start); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); })
+    .reduce((a, { r }) => a + (num(r.km) || 0), 0);
+  const paces = runs.map(({ r }) => runPace(r)).filter(Boolean);
+  const longest = Math.max(0, ...runs.map(({ r }) => num(r.km) || 0));
+  const fmtNum = (n) => String(Math.round(n * 10) / 10).replace('.', ',');
+  openSheet(`<h2>${RUN_ICON} Correr</h2>
+    ${runs.length ? `<div class="card best-card">
+      <div><div class="muted small">Km este mes</div><div class="big-num">${fmtNum(monthKm)}</div></div>
+      <div><div class="muted small">Más larga</div><div class="big-num">${fmtNum(longest)} km</div></div>
+      ${paces.length ? `<div><div class="muted small">Mejor ritmo</div><div class="big-num">${fmtClock(Math.min(...paces))}</div></div>` : ''}
+    </div>
+    <div class="section-title">Historial</div>
+    <div class="card">${runs.slice(0, 60).map(({ w, r }) => `
+      <div class="history-item">
+        <div class="row between"><b>${esc(fmtDate(w.start, { day: 'numeric', month: 'short', year: 'numeric' }))}</b><span class="muted small">${esc(w.name)}</span></div>
+        <div class="muted small" style="margin-top:2px">${esc(fmtRun(r))}</div>
+        ${r.comment ? `<div class="muted small" style="white-space:pre-wrap">${esc(r.comment)}</div>` : ''}
+      </div>`).join('')}</div>` : '<div class="empty">Aún no has apuntado ninguna carrera.</div>'}`, 'runs');
 }
 
 function openMergePicker(name) {
@@ -1236,6 +1349,15 @@ document.addEventListener('click', (e) => {
       break;
     }
     case 'add-ex': addExerciseFromInput(); break;
+    case 'add-run':
+      a.exercises.push(newRun()); save(); render();
+      setTimeout(() => { document.querySelector('.run-card [data-run="km"]')?.focus(); }, 50);
+      break;
+    case 'start-run':
+      if (db.active && !confirm('Ya tienes un entreno en curso. ¿Descartarlo y empezar otro?')) return;
+      startRun();
+      break;
+    case 'run-history': openRunHistory(); break;
     case 'finish': finishWorkout(); break;
     case 'discard':
       if (confirm('¿Seguro que quieres descartar este entreno? Se perderá lo apuntado.')) {
@@ -1398,6 +1520,12 @@ document.addEventListener('input', (e) => {
   if (t.dataset.note != null) {
     setNote(t.dataset.note, t.value);
     save();
+  } else if (t.dataset.run && db.active) {
+    const ex = db.active.exercises[+t.dataset.ei];
+    ex[t.dataset.run] = t.dataset.run === 'comment' ? t.value : t.value.trim();
+    save();
+    const pace = runPace(ex), el = $(`#pace-${t.dataset.ei}`);
+    if (el) el.textContent = pace ? `Ritmo ${fmtClock(pace)} /km` : '';
   } else if (t.dataset.field && db.active) {
     db.active.exercises[+t.dataset.ei].sets[+t.dataset.si][t.dataset.field] = t.value.trim();
     save();
