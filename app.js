@@ -4,7 +4,7 @@
    Gym Tracker — PWA local. Todos los datos viven en localStorage.
    ============================================================ */
 
-const APP_VERSION = 7; // súbela junto con CACHE en sw.js
+const APP_VERSION = 8; // súbela junto con CACHE en sw.js
 const STORE_KEY = 'gymtracker.v1';
 const TIMER_KEY = 'gymtracker.timer';
 
@@ -151,6 +151,14 @@ function setNote(name, text, gymId = currentGym()) {
 const hasAnyNote = (e) => Object.values(e.notes || {}).some(Boolean);
 
 const restFor = (name) => libEntry(name)?.rest || db.settings.defaultRest;
+// Peso de referencia: el que se usa mientras no hay historial en este gimnasio
+const weightFor = (name) => { const w = libEntry(name)?.weight; return w > 0 ? w : null; };
+const fmtKg = (w) => `${String(w).replace('.', ',')} kg`;
+function setWeight(name, value) {
+  const lib = ensureLib(name);
+  const w = num(value);
+  if (w > 0) lib.weight = w; else delete lib.weight;
+}
 const repsFor = (name) => libEntry(name)?.reps || '';
 
 function exerciseStats(name) {
@@ -385,9 +393,15 @@ function renderActive() {
   a.exercises.forEach((ex, ei) => {
     const last = lastSetsFor(ex.name, a.start, a.gymId);
     const best = bestWeightFor(ex.name, a.start, a.gymId);
-    const lastTxt = !last ? 'Primera vez con este ejercicio'
-      : last.other ? `Aquí es la 1ª vez · en ${gymName(last.gymId)}: ${last.sets.map(fmtSet).join(', ')}`
-      : `Última vez: ${last.sets.map(fmtSet).join(', ')}`;
+    // Prioridad para proponer pesos: historial de este gimnasio > peso de referencia > otro gimnasio
+    const here = last && !last.other ? last : null;
+    const other = last && last.other ? last : null;
+    const refW = weightFor(ex.name);
+    const otherTxt = other ? `en ${gymName(other.gymId)}: ${other.sets.map(fmtSet).join(', ')}` : '';
+    const lastTxt = here ? `Última vez: ${here.sets.map(fmtSet).join(', ')}`
+      : refW != null ? `Referencia: ${fmtKg(refW)}${otherTxt ? ' · ' + otherTxt : ''}`
+      : other ? `Aquí es la 1ª vez · ${otherTxt}`
+      : 'Primera vez con este ejercicio';
     html += `<div class="card ex-card">
       <div class="ex-head">
         <div class="grow">
@@ -400,10 +414,11 @@ function renderActive() {
       ${noteBox(ex.name)}
       <div class="sets-head"><span>#</span><span>kg</span><span>reps</span><span></span></div>
       ${ex.sets.map((s, si) => {
-        const prev = last ? (last.sets[si] || last.sets[last.sets.length - 1]) : null;
+        const pick = (l) => (l ? l.sets[si] || l.sets[l.sets.length - 1] : null);
+        const prev = pick(here), prevOther = pick(other);
         const before = si > 0 ? ex.sets[si - 1] : null; // serie anterior de hoy
-        const phW = prev && prev.w !== '' ? prev.w : (before && before.w) || '';
-        const phR = prev ? prev.r : (ex.targetReps || (before && before.r) || '');
+        const phW = (prev && prev.w) || (refW != null ? String(refW) : '') || (prevOther && prevOther.w) || (before && before.w) || '';
+        const phR = prev ? prev.r : (ex.targetReps || (prevOther && prevOther.r) || (before && before.r) || '');
         const isPR = s.done && best != null && num(s.w) != null && num(s.w) > best;
         return `<div class="set-row ${s.done ? 'done' : ''}">
           <div class="num">${si + 1}</div>
@@ -510,7 +525,12 @@ function openRoutineEditor(id) {
 
 // Las notas del editor son las del gimnasio de la rutina (o el actual si es para todos)
 const draftNoteGym = () => draft.gymId || currentGym();
-function loadDraftNotes() { draft.exercises.forEach((e) => { e.note = getNote(e.name, draftNoteGym()); }); }
+function loadDraftNotes() {
+  draft.exercises.forEach((e) => {
+    e.note = getNote(e.name, draftNoteGym());
+    e.weight = weightFor(e.name) ?? '';
+  });
+}
 
 function duplicateRoutine() {
   const copy = JSON.parse(JSON.stringify(draft));
@@ -542,10 +562,11 @@ function renderRoutineEditor() {
           <button class="icon-btn" data-action="rex-move" data-i="${i}" data-dir="-1">↑</button>
           <button class="icon-btn" data-action="rex-del" data-i="${i}">✕</button>
         </div>
-        <div class="grid3">
+        <div class="grid4">
           <div><label>Series</label><input inputmode="numeric" data-efield="sets" data-i="${i}" value="${esc(e.sets)}"></div>
           <div><label>Reps</label><input inputmode="numeric" data-efield="reps" data-i="${i}" value="${esc(e.reps)}"></div>
-          <div><label>Descanso s</label><input inputmode="numeric" data-efield="rest" data-i="${i}" value="${esc(e.rest)}"></div>
+          <div><label>Kg</label><input inputmode="decimal" data-efield="weight" data-i="${i}" value="${esc(e.weight ?? '')}" placeholder="—"></div>
+          <div><label>Desc. s</label><input inputmode="numeric" data-efield="rest" data-i="${i}" value="${esc(e.rest)}"></div>
         </div>
         <textarea class="ex-note" rows="1" data-efield="note" data-i="${i}" placeholder="${esc(notePlaceholder(draftNoteGym()))}">${esc(e.note || '')}</textarea>
       </div>`).join('')}
@@ -567,7 +588,11 @@ function saveRoutine() {
   d.name = d.name.trim();
   if (!d.name) { toast('Ponle un nombre a la rutina'); return; }
   d.gymId = d.gymId || null;
-  d.exercises.forEach((e) => { if (e.note != null) setNote(e.name, e.note, draftNoteGym()); });
+  d.exercises.forEach((e) => {
+    if (!String(e.name).trim()) return;
+    if (e.note != null) setNote(e.name, e.note, draftNoteGym());
+    if (e.weight != null) setWeight(e.name, e.weight);
+  });
   d.exercises = d.exercises
     .filter((e) => String(e.name).trim())
     .map((e) => ({
@@ -723,6 +748,7 @@ function openExercise(name) {
     <div class="grid2">
       <div><label class="field-label">Descanso</label><select data-pref="rest" data-name="${esc(name)}">${restOpts}</select></div>
       <div><label class="field-label">Reps objetivo</label><input inputmode="numeric" data-pref="reps" data-name="${esc(name)}" value="${esc(lib.reps || '')}" placeholder="—"></div>
+      <div><label class="field-label">Peso de referencia</label><input inputmode="decimal" data-pref="weight" data-name="${esc(name)}" value="${esc(lib.weight ?? '')}" placeholder="kg"></div>
     </div>
     ${inUse.length ? `<div class="muted small" style="margin:10px 2px 0">En rutinas: ${inUse.map(esc).join(', ')}</div>` : ''}
     <div class="row" style="margin-top:14px">
@@ -832,11 +858,49 @@ async function exportData() {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
+/* Paquete de rutinas: se AÑADE a lo que haya (no borra entrenos ni otras rutinas).
+   Formato: { type: 'routines', routines: [{ name, exercises: [{ name, sets, reps, weight, note }] }] } */
+function importRoutinePack(pack) {
+  const names = pack.routines.map((r) => r.name).join(', ');
+  if (!confirm(`Se van a añadir ${pack.routines.length} rutinas${pack.owner ? ` de ${pack.owner}` : ''}:\n${names}\n\n` +
+    'Con sus pesos y notas. No se borra nada de lo que ya tienes (si hay una rutina con el mismo nombre, se actualiza).')) return;
+
+  // La rutina de ejemplo sobra si nunca se ha usado
+  const example = db.routines.find((r) => r.name === 'Ejemplo · Full body');
+  if (example && !db.workouts.some((w) => w.routineId === example.id)) {
+    db.routines = db.routines.filter((r) => r !== example);
+  }
+
+  for (const r of pack.routines) {
+    const exercises = (r.exercises || []).filter((e) => e && String(e.name || '').trim()).map((e) => {
+      const name = libEntry(e.name)?.name || String(e.name).trim();
+      const lib = ensureLib(name);
+      if (e.weight != null) setWeight(name, e.weight);
+      if (e.reps) lib.reps = parseInt(e.reps, 10) || lib.reps;
+      if (e.rest) lib.rest = parseInt(e.rest, 10) || lib.rest;
+      // La nota se guarda en el gimnasio actual; si ya había una distinta, se añade debajo
+      if (e.note) {
+        const prev = getNote(name);
+        if (!prev.includes(e.note)) setNote(name, prev ? `${prev}\n${e.note}` : e.note);
+      }
+      return { name, sets: Math.max(1, parseInt(e.sets, 10) || 3), reps: parseInt(e.reps, 10) || 10, rest: parseInt(e.rest, 10) || restFor(name) };
+    });
+    const existing = db.routines.find((x) => norm(x.name) === norm(r.name));
+    if (existing) existing.exercises = exercises;
+    else db.routines.push({ id: uid(), name: String(r.name).trim(), gymId: null, exercises });
+  }
+  save();
+  refreshDatalist();
+  setTab('rutinas');
+  toast(`${pack.routines.length} rutinas importadas ✅`);
+}
+
 function importData(file) {
   const reader = new FileReader();
   reader.onload = () => {
     try {
       const data = JSON.parse(reader.result);
+      if (data.type === 'routines' && Array.isArray(data.routines)) { importRoutinePack(data); return; }
       if (!Array.isArray(data.workouts) || !Array.isArray(data.routines)) throw new Error('formato');
       const choice = confirm(
         `La copia tiene ${data.workouts.length} entrenos y ${data.routines.length} rutinas.\n\n` +
@@ -1333,15 +1397,18 @@ document.addEventListener('input', (e) => {
 document.addEventListener('change', (e) => {
   const t = e.target;
   if (t.dataset.pref) {
-    // Descanso / reps propios del ejercicio
+    // Descanso / reps / peso de referencia propios del ejercicio
     const lib = ensureLib(t.dataset.name);
-    const v = parseInt(t.value, 10);
-    if (v > 0) lib[t.dataset.pref] = v; else delete lib[t.dataset.pref];
+    if (t.dataset.pref === 'weight') setWeight(lib.name, t.value);
+    else {
+      const v = parseInt(t.value, 10);
+      if (v > 0) lib[t.dataset.pref] = v; else delete lib[t.dataset.pref];
+    }
     if (db.active) {
       db.active.exercises.forEach((ex) => {
         if (norm(ex.name) !== norm(lib.name)) return;
         if (t.dataset.pref === 'rest') ex.rest = restFor(lib.name);
-        else ex.targetReps = repsFor(lib.name);
+        else if (t.dataset.pref === 'reps') ex.targetReps = repsFor(lib.name);
       });
     }
     save();
@@ -1360,6 +1427,7 @@ document.addEventListener('change', (e) => {
       ex.name = lib.name;
       if (lib.rest) ex.rest = lib.rest;
       if (lib.reps) ex.reps = lib.reps;
+      if (lib.weight) ex.weight = lib.weight;
       ex.note = getNote(lib.name, draftNoteGym()) || ex.note || '';
       rerenderEditor();
     }
