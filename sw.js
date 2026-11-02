@@ -1,6 +1,6 @@
 // Service worker: guarda la app en caché para que funcione sin conexión.
 // Sube la versión cada vez que cambies algún archivo para que los móviles se actualicen.
-const CACHE = 'gym-v8';
+const CACHE = 'gym-v9';
 const FILES = [
   './',
   './index.html',

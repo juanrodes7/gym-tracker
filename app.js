@@ -4,7 +4,7 @@
    Gym Tracker — PWA local. Todos los datos viven en localStorage.
    ============================================================ */
 
-const APP_VERSION = 8; // súbela junto con CACHE en sw.js
+const APP_VERSION = 9; // súbela junto con CACHE en sw.js
 const STORE_KEY = 'gymtracker.v1';
 const TIMER_KEY = 'gymtracker.timer';
 
@@ -828,7 +828,7 @@ function renderAjustes() {
       <div class="muted small">Los datos se guardan solo en este móvil. Haz una copia de vez en cuando, o úsala para pasar rutinas a otro móvil.</div>
       <button class="btn block" data-action="export">⬇️ Exportar copia</button>
       <button class="btn block" data-action="import">⬆️ Importar copia</button>
-      <input type="file" id="import-file" accept="application/json,.json" class="hidden">
+      <input type="file" id="import-file" class="hidden">
     </div>
 
     <div class="section-title">Instalar en el móvil</div>
@@ -898,10 +898,17 @@ function importRoutinePack(pack) {
 function importData(file) {
   const reader = new FileReader();
   reader.onload = () => {
+    let data;
     try {
-      const data = JSON.parse(reader.result);
-      if (data.type === 'routines' && Array.isArray(data.routines)) { importRoutinePack(data); return; }
-      if (!Array.isArray(data.workouts) || !Array.isArray(data.routines)) throw new Error('formato');
+      data = parseLooseJSON(String(reader.result || ''));
+    } catch (e) {
+      alert(`No he podido leer “${file.name}”. Asegúrate de elegir el archivo .json original (no una captura ni un texto copiado).\n\nDetalle: ${e.message}`);
+      return;
+    }
+    try {
+      // Paquete de rutinas: también si viene sin "type" pero trae rutinas y no entrenos
+      if (Array.isArray(data.routines) && (data.type === 'routines' || !Array.isArray(data.workouts))) { importRoutinePack(data); return; }
+      if (!Array.isArray(data.workouts) || !Array.isArray(data.routines)) throw new Error('No tiene rutinas ni entrenos');
       const choice = confirm(
         `La copia tiene ${data.workouts.length} entrenos y ${data.routines.length} rutinas.\n\n` +
         'Aceptar = reemplazar todo lo de este móvil.\nCancelar = no hacer nada.'
@@ -914,10 +921,20 @@ function importData(file) {
       render();
       toast('Copia importada ✅');
     } catch (e) {
-      toast('Ese archivo no es una copia válida');
+      alert(`“${file.name}” no es una copia ni un archivo de rutinas de esta app.\n\nDetalle: ${e.message}`);
     }
   };
   reader.readAsText(file);
+}
+
+// Lee JSON aunque al reenviarlo (WhatsApp, Notas, correo…) le hayan metido BOM, comillas tipográficas o texto alrededor
+function parseLooseJSON(text) {
+  let t = text.replace(/^﻿/, '').trim();
+  try { return JSON.parse(t); } catch {}
+  t = t.replace(/[“”„‟″]/g, '"').replace(/[‘’]/g, "'").replace(/ /g, ' ');
+  const a = t.indexOf('{'), b = t.lastIndexOf('}');
+  if (a >= 0 && b > a) t = t.slice(a, b + 1);
+  return JSON.parse(t);
 }
 
 /* ---------- Hoja modal ---------- */
