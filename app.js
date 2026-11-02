@@ -4,7 +4,7 @@
    Gym Tracker — PWA local. Todos los datos viven en localStorage.
    ============================================================ */
 
-const APP_VERSION = 12; // súbela junto con CACHE en sw.js
+const APP_VERSION = 13; // súbela junto con CACHE en sw.js
 const STORE_KEY = 'gymtracker.v1';
 const TIMER_KEY = 'gymtracker.timer';
 
@@ -1142,6 +1142,7 @@ const PUSH_KEY = 'gymtracker.push'; // { id, sub } — propio de cada móvil, no
 let push = (() => { try { return JSON.parse(localStorage.getItem(PUSH_KEY)); } catch { return null; } })();
 const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+const isAndroid = () => /Android/i.test(navigator.userAgent);
 const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
 function pushStatus() {
@@ -1229,8 +1230,10 @@ function tick() {
   if (!timer) { bar.classList.add('hidden'); bar.classList.remove('finished'); updateFab(); return; }
   const remaining = (timer.end - Date.now()) / 1000;
   bar.classList.remove('hidden');
-  // Con la app delante avisa ella misma: cancela el push justo antes para no duplicar
-  if (timer.pushed && !timer.fired && remaining <= 1.5 && remaining > 0 && document.visibilityState === 'visible') {
+  // En iPhone, con la app delante avisa ella misma: cancela el push justo antes para no duplicar.
+  // En Android NO: la vibración de la página (navigator.vibrate) la puede bloquear el sistema,
+  // pero la de la notificación sigue el modo vibración del móvil, así que la notificación llega siempre.
+  if (timer.pushed && !timer.fired && remaining <= 1.5 && remaining > 0 && document.visibilityState === 'visible' && !isAndroid()) {
     timer.pushed = false;
     localStorage.setItem(TIMER_KEY, JSON.stringify(timer));
     cancelPush();
@@ -1239,8 +1242,9 @@ function tick() {
     if (!timer.fired) {
       timer.fired = true;
       localStorage.setItem(TIMER_KEY, JSON.stringify(timer));
-      // Si el aviso push ya sonó (app en segundo plano), no volvemos a pitar al abrirla
-      if (remaining > -30 && !timer.pushed) {
+      // Pita/vibra en la app si se está viendo justo ahora; si el push ya avisó en segundo plano, no repetir al abrirla
+      const liveNow = document.visibilityState === 'visible' && remaining > -2;
+      if (liveNow || (remaining > -30 && !timer.pushed)) {
         beep();
         if (db.settings.vibrate && navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]);
       }
