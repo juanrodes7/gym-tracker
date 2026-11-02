@@ -4,7 +4,7 @@
    Gym Tracker — PWA local. Todos los datos viven en localStorage.
    ============================================================ */
 
-const APP_VERSION = 5; // súbela junto con CACHE en sw.js
+const APP_VERSION = 6; // súbela junto con CACHE en sw.js
 const STORE_KEY = 'gymtracker.v1';
 const TIMER_KEY = 'gymtracker.timer';
 
@@ -30,6 +30,7 @@ const dateKey = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${p
 const fmtClock = (sec) => { sec = Math.max(0, Math.round(sec)); return `${Math.floor(sec / 60)}:${pad(sec % 60)}`; };
 const fmtDuration = (ms) => { const m = Math.round(ms / 60000); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
 const fmtDate = (ts, opts = { weekday: 'long', day: 'numeric', month: 'long' }) => new Date(ts).toLocaleDateString('es-ES', opts);
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const fmtTime =(ts) => new Date(ts).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
 const fmtSet = (s) => (s.w !== '' && s.w != null ? `${s.w} kg × ${s.r}` : `${s.r} reps`);
@@ -37,9 +38,12 @@ const fmtSet = (s) => (s.w !== '' && s.w != null ? `${s.w} kg × ${s.r}` : `${s.
 /* ---------- Datos ---------- */
 
 function seed() {
+  const gymId = uid();
   return {
     version: 1,
-    settings: { defaultRest: 90, sound: true, vibrate: true },
+    settings: { defaultRest: 90, sound: true, vibrate: true, currentGym: gymId },
+    // Gimnasios: cada entreno guarda en cuál se hizo; las rutinas pueden ser de uno o de todos (gymId null)
+    gyms: [{ id: gymId, name: 'Habitual' }],
     routines: [{
       id: uid(),
       name: 'Ejemplo · Full body',
@@ -51,7 +55,7 @@ function seed() {
       ],
     }],
     workouts: [],
-    // Biblioteca de ejercicios (clave: norm(nombre)) → { name, note, rest, reps }
+    // Biblioteca de ejercicios (clave: norm(nombre)) → { name, notes: { gymId: texto }, rest, reps }
     // Es independiente de las rutinas: borrar una rutina no borra nada de aquí.
     library: {},
     active: null,
@@ -63,11 +67,18 @@ function migrate(d) {
   const out = {
     version: 1,
     settings: { ...base.settings, ...(d.settings || {}) },
+    gyms: Array.isArray(d.gyms) && d.gyms.length ? d.gyms : base.gyms,
     routines: Array.isArray(d.routines) ? d.routines : [],
     workouts: Array.isArray(d.workouts) ? d.workouts : [],
     library: {},
     active: d.active || null,
   };
+  if (!out.gyms.some((g) => g.id === out.settings.currentGym)) out.settings.currentGym = out.gyms[0].id;
+  const firstGym = out.gyms[0].id;
+  // Lo anterior a tener gimnasios se hizo en el primero ("Habitual")
+  out.workouts.forEach((w) => { if (!w.gymId) w.gymId = firstGym; });
+  if (out.active && !out.active.gymId) out.active.gymId = out.settings.currentGym;
+
   if (d.library && typeof d.library === 'object') {
     Object.values(d.library).forEach((e) => { if (e && e.name) out.library[norm(e.name)] = { ...e }; });
   }
@@ -78,6 +89,11 @@ function migrate(d) {
       out.library[key] = { name: out.library[key]?.name || cap(k), ...out.library[key], note };
     });
   }
+  // Versión anterior: una sola nota por ejercicio → pasa a ser la del primer gimnasio
+  Object.values(out.library).forEach((e) => {
+    if (e.note) { e.notes = { [firstGym]: e.note, ...(e.notes || {}) }; }
+    delete e.note;
+  });
   return out;
 }
 
@@ -118,12 +134,21 @@ function ensureLib(name) {
   return (db.library[k] ||= { name: String(name).trim() });
 }
 
-const getNote = (name) => libEntry(name)?.note || '';
-function setNote(name, text) {
+/* Gimnasios */
+const currentGym = () => db.settings.currentGym;
+const gymName = (id) => db.gyms.find((g) => g.id === id)?.name || '¿?';
+const multiGym = () => db.gyms.length > 1;
+const PIN = '<svg class="pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg>';
+
+// Las notas (altura de polea, asiento…) dependen de la máquina, así que van por gimnasio
+const getNote = (name, gymId = currentGym()) => libEntry(name)?.notes?.[gymId] || '';
+function setNote(name, text, gymId = currentGym()) {
   const e = ensureLib(name);
   if (!e) return;
-  if (text.trim()) e.note = text; else delete e.note;
+  e.notes ||= {};
+  if (text.trim()) e.notes[gymId] = text; else delete e.notes[gymId];
 }
+const hasAnyNote = (e) => Object.values(e.notes || {}).some(Boolean);
 
 const restFor = (name) => libEntry(name)?.rest || db.settings.defaultRest;
 const repsFor = (name) => libEntry(name)?.reps || '';
@@ -150,8 +175,10 @@ function renameExercise(oldName, newName) {
   const src = db.library[kOld] || { name: oldName };
   if (kNew !== kOld && db.library[kNew]) {
     const dst = db.library[kNew];
-    const notes = [dst.note, src.note].filter(Boolean);
-    if (notes.length) dst.note = notes.join('\n');
+    dst.notes ||= {};
+    Object.entries(src.notes || {}).forEach(([g, txt]) => {
+      dst.notes[g] = [dst.notes[g], txt].filter(Boolean).join('\n');
+    });
     dst.rest ||= src.rest;
     dst.reps ||= src.reps;
     delete db.library[kOld];
@@ -163,8 +190,12 @@ function renameExercise(oldName, newName) {
   refreshDatalist();
 }
 
+function notePlaceholder(gymId = currentGym()) {
+  return multiGym() ? `Nota en ${gymName(gymId)}: polea, asiento, agarre…` : 'Nota: altura de polea, asiento, agarre…';
+}
+
 function noteBox(name) {
-  return `<textarea class="ex-note" rows="1" data-note="${esc(name)}" placeholder="📝 Nota: altura de polea, asiento, agarre…">${esc(getNote(name))}</textarea>`;
+  return `<textarea class="ex-note" rows="1" data-note="${esc(name)}" placeholder="${esc(notePlaceholder())}">${esc(getNote(name))}</textarea>`;
 }
 
 // Ajusta la altura de las notas a su contenido
@@ -173,21 +204,27 @@ function autosizeAll(root = document) { root.querySelectorAll('textarea.ex-note'
 
 const sortedWorkouts = () => [...db.workouts].sort((a, b) => b.start - a.start);
 
-function lastSetsFor(name, beforeTs = Infinity) {
+// Última vez que se hizo el ejercicio: primero en ese gimnasio; si nunca, en cualquier otro (other: true)
+function lastSetsFor(name, beforeTs = Infinity, gymId = currentGym()) {
   const n = norm(name);
+  let fallback = null;
   for (const w of sortedWorkouts()) {
     if (w.start >= beforeTs) continue;
     const ex = w.exercises.find((e) => norm(e.name) === n);
-    if (ex && ex.sets.length) return { sets: ex.sets, date: w.start };
+    if (!ex || !ex.sets.length) continue;
+    if (w.gymId === gymId) return { sets: ex.sets, date: w.start, gymId: w.gymId, other: false };
+    fallback ||= { sets: ex.sets, date: w.start, gymId: w.gymId, other: true };
   }
-  return null;
+  return fallback;
 }
 
-function bestWeightFor(name, beforeTs = Infinity) {
+// gymId opcional: si se pasa, solo cuenta ese gimnasio (las máquinas de otro no son comparables)
+function bestWeightFor(name, beforeTs = Infinity, gymId = null) {
   const n = norm(name);
   let best = null;
   for (const w of db.workouts) {
     if (w.start >= beforeTs) continue;
+    if (gymId && w.gymId !== gymId) continue;
     for (const e of w.exercises) {
       if (norm(e.name) !== n) continue;
       for (const s of e.sets) { const v = num(s.w); if (v != null && (best == null || v > best)) best = v; }
@@ -242,17 +279,19 @@ function renderHoy() {
   const todays = db.workouts.filter((w) => dateKey(w.start) === dateKey(Date.now()));
   const last = sortedWorkouts()[0];
 
-  let html = '';
+  let html = gymChip();
   if (todays.length) {
     html += `<div class="card" style="border-color:var(--ok);background:var(--ok-soft)">
-      <h3>✅ Hoy ya has entrenado</h3>
+      <h3>Hoy ya has entrenado ✓</h3>
       <div class="muted small">${todays.map((w) => esc(w.name)).join(' · ')}</div>
     </div>`;
   }
 
+  const routines = routinesForGym();
+  const hidden = db.routines.length - routines.length;
   html += `<div class="section-title">Empezar entreno</div>`;
-  if (db.routines.length) {
-    html += db.routines.map((r) => `
+  if (routines.length) {
+    html += routines.map((r) => `
       <div class="card routine-card">
         <div class="info">
           <h3>${esc(r.name)}</h3>
@@ -261,7 +300,12 @@ function renderHoy() {
         <button class="btn primary sm" data-action="start" data-id="${r.id}">Empezar</button>
       </div>`).join('');
   } else {
-    html += `<div class="card muted small">Aún no tienes rutinas. Créalas en la pestaña <b>Rutinas</b>.</div>`;
+    html += `<div class="card muted small">${hidden
+      ? `No hay rutinas para ${esc(gymName(currentGym()))}. En <b>Rutinas</b> puedes duplicar una y adaptarla a este gimnasio.`
+      : 'Aún no tienes rutinas. Créalas en la pestaña <b>Rutinas</b>.'}</div>`;
+  }
+  if (hidden && routines.length) {
+    html += `<div class="muted small" style="margin:-4px 4px 12px">${hidden} ${hidden === 1 ? 'rutina oculta' : 'rutinas ocultas'} de otros gimnasios</div>`;
   }
   html += `<button class="btn block" data-action="start-free">＋ Entreno libre</button>`;
 
@@ -272,13 +316,57 @@ function renderHoy() {
   return html;
 }
 
+/* ---------- Gimnasios ---------- */
+
+const routinesForGym = (gymId = currentGym()) => db.routines.filter((r) => !r.gymId || r.gymId === gymId);
+
+function gymChip() {
+  return `<button class="gym-chip" data-action="gym-menu">${PIN}<span>${esc(gymName(currentGym()))}</span> <span class="muted">▾</span></button>`;
+}
+
+function openGymMenu() {
+  const usedBy = (id) => db.workouts.some((w) => w.gymId === id) || db.routines.some((r) => r.gymId === id);
+  openSheet(`<h2>¿Dónde entrenas hoy?</h2>
+    <div class="muted small" style="margin-bottom:14px">Cada gimnasio guarda sus propios pesos y notas de máquinas, y puede tener sus rutinas.</div>
+    ${db.gyms.map((g) => `
+      <div class="card gym-row ${g.id === currentGym() ? 'selected' : ''}">
+        <button class="grow gym-pick" data-action="gym-select" data-id="${g.id}">
+          <span class="radio"></span><b>${esc(g.name)}</b>
+        </button>
+        <button class="icon-btn" data-action="gym-rename" data-id="${g.id}" aria-label="Renombrar">✏️</button>
+        ${db.gyms.length > 1 && !usedBy(g.id) ? `<button class="icon-btn" data-action="gym-delete" data-id="${g.id}" aria-label="Borrar">🗑</button>` : ''}
+      </div>`).join('')}
+    <div class="add-ex" style="margin-top:6px">
+      <input id="new-gym" placeholder="Nuevo gimnasio…" autocomplete="off" enterkeyhint="done">
+      <button class="btn" data-action="gym-add">Añadir</button>
+    </div>`, 'gyms');
+}
+
+function selectGym(id) {
+  db.settings.currentGym = id;
+  if (db.active) db.active.gymId = id;
+  save();
+  closeSheet();
+  render();
+  toast(`Entrenando en ${gymName(id)}`);
+}
+
+function addGym() {
+  const input = $('#new-gym');
+  const name = input.value.trim();
+  if (!name) { input.focus(); return; }
+  const g = { id: uid(), name };
+  db.gyms.push(g);
+  selectGym(g.id);
+}
+
 function workoutCard(w) {
   return `<div class="card" data-action="open-workout" data-id="${w.id}">
     <div class="row between">
       <h3>${esc(w.name)}</h3>
       <span class="muted small">${esc(fmtDate(w.start, { day: 'numeric', month: 'short' }))}</span>
     </div>
-    <div class="muted small">${w.exercises.length} ejercicios · ${w.exercises.reduce((a, e) => a + e.sets.length, 0)} series${w.end ? ' · ' + fmtDuration(w.end - w.start) : ''}</div>
+    <div class="muted small">${multiGym() ? `${PIN}${esc(gymName(w.gymId))} · ` : ''}${plural(w.exercises.length, 'ejercicio')} · ${plural(w.exercises.reduce((a, e) => a + e.sets.length, 0), 'serie')}${w.end ? ' · ' + fmtDuration(w.end - w.start) : ''}</div>
   </div>`;
 }
 
@@ -289,15 +377,17 @@ function renderActive() {
   $('#title').textContent = a.name;
   $('#topbar-extra').innerHTML = `<span class="sub" id="elapsed"></span>`;
 
-  let html = '';
+  let html = gymChip();
   if (!a.exercises.length) {
     html += `<div class="empty"><div class="big">🏋️</div>Añade tu primer ejercicio abajo</div>`;
   }
 
   a.exercises.forEach((ex, ei) => {
-    const last = lastSetsFor(ex.name, a.start);
-    const best = bestWeightFor(ex.name, a.start);
-    const lastTxt = last ? `Última vez: ${last.sets.map(fmtSet).join(', ')}` : 'Primera vez con este ejercicio';
+    const last = lastSetsFor(ex.name, a.start, a.gymId);
+    const best = bestWeightFor(ex.name, a.start, a.gymId);
+    const lastTxt = !last ? 'Primera vez con este ejercicio'
+      : last.other ? `Aquí es la 1ª vez · en ${gymName(last.gymId)}: ${last.sets.map(fmtSet).join(', ')}`
+      : `Última vez: ${last.sets.map(fmtSet).join(', ')}`;
     html += `<div class="card ex-card">
       <div class="ex-head">
         <div class="grow">
@@ -348,6 +438,7 @@ function startWorkout(routine) {
     id: uid(),
     routineId: routine ? routine.id : null,
     name: routine ? routine.name : 'Entreno libre',
+    gymId: currentGym(),
     start: Date.now(),
     exercises: routine
       ? routine.exercises.map((e) => ({
@@ -370,7 +461,7 @@ function finishWorkout() {
     if (confirm('No has marcado ninguna serie como hecha. ¿Descartar el entreno?')) { db.active = null; save(); render(); }
     return;
   }
-  db.workouts.push({ id: a.id, routineId: a.routineId, name: a.name, start: a.start, end: Date.now(), exercises });
+  db.workouts.push({ id: a.id, routineId: a.routineId, gymId: a.gymId || currentGym(), name: a.name, start: a.start, end: Date.now(), exercises });
   db.active = null;
   syncLibrary();
   save();
@@ -389,12 +480,15 @@ function renderRutinas() {
   if (!db.routines.length) {
     html += `<div class="empty"><div class="big">📋</div>Crea tu primera rutina:<br>por ejemplo “Pierna” o “Empuje”.</div>`;
   }
-  html += db.routines.map((r) => `
-    <div class="card">
+  // Primero las del gimnasio actual
+  const here = (r) => (!r.gymId || r.gymId === currentGym() ? 0 : 1);
+  html += [...db.routines].sort((a, b) => here(a) - here(b)).map((r) => `
+    <div class="card ${here(r) ? 'dim' : ''}">
       <div class="row between">
         <h3>${esc(r.name)}</h3>
         <button class="btn sm" data-action="edit-routine" data-id="${r.id}">Editar</button>
       </div>
+      ${multiGym() ? `<div class="gym-tag">${PIN}${r.gymId ? esc(gymName(r.gymId)) : 'Todos los gimnasios'}</div>` : ''}
       <div class="muted small" style="margin:6px 0 12px">
         ${r.exercises.map((e) => `${esc(e.name)} <span style="opacity:.7">${e.sets}×${e.reps}</span>`).join('<br>') || 'Sin ejercicios'}
       </div>
@@ -408,17 +502,38 @@ let draft = null; // copia de la rutina que se está editando
 
 function openRoutineEditor(id) {
   const r = db.routines.find((x) => x.id === id);
-  draft = r ? JSON.parse(JSON.stringify(r)) : { id: uid(), name: '', exercises: [], isNew: true };
-  draft.exercises.forEach((e) => { e.note = getNote(e.name); });
+  draft = r ? JSON.parse(JSON.stringify(r)) : { id: uid(), name: '', gymId: null, exercises: [], isNew: true };
+  loadDraftNotes();
   openSheet(renderRoutineEditor(), 'routine');
   if (!r) setTimeout(() => $('#r-name')?.focus(), 300);
 }
 
+// Las notas del editor son las del gimnasio de la rutina (o el actual si es para todos)
+const draftNoteGym = () => draft.gymId || currentGym();
+function loadDraftNotes() { draft.exercises.forEach((e) => { e.note = getNote(e.name, draftNoteGym()); }); }
+
+function duplicateRoutine() {
+  const copy = JSON.parse(JSON.stringify(draft));
+  copy.id = uid();
+  copy.name = `${draft.name} (${gymName(currentGym())})`;
+  copy.gymId = currentGym();
+  copy.isNew = true;
+  draft = copy;
+  loadDraftNotes();
+  rerenderEditor();
+  $('#sheet').scrollTop = 0;
+  toast('Copia creada: cambia lo que sea distinto y guarda');
+}
+
 function renderRoutineEditor() {
   const d = draft;
+  const gymOpts = `<option value="">Todos los gimnasios</option>` +
+    db.gyms.map((g) => `<option value="${g.id}" ${g.id === d.gymId ? 'selected' : ''}>${esc(g.name)}</option>`).join('');
   return `<h2>${d.isNew ? 'Nueva rutina' : 'Editar rutina'}</h2>
     <label class="field-label">Nombre</label>
     <input id="r-name" data-rfield="name" value="${esc(d.name)}" placeholder="Ej: Pierna">
+    ${multiGym() ? `<label class="field-label" style="margin-top:12px">Gimnasio</label>
+      <select data-rfield="gymId">${gymOpts}</select>` : ''}
     <div class="section-title">Ejercicios</div>
     ${d.exercises.map((e, i) => `
       <div class="edit-ex">
@@ -432,11 +547,12 @@ function renderRoutineEditor() {
           <div><label>Reps</label><input inputmode="numeric" data-efield="reps" data-i="${i}" value="${esc(e.reps)}"></div>
           <div><label>Descanso s</label><input inputmode="numeric" data-efield="rest" data-i="${i}" value="${esc(e.rest)}"></div>
         </div>
-        <textarea class="ex-note" rows="1" data-efield="note" data-i="${i}" placeholder="📝 Nota: altura de polea, asiento, agarre…">${esc(e.note || '')}</textarea>
+        <textarea class="ex-note" rows="1" data-efield="note" data-i="${i}" placeholder="${esc(notePlaceholder(draftNoteGym()))}">${esc(e.note || '')}</textarea>
       </div>`).join('')}
     <button class="btn block" data-action="rex-add">＋ Añadir ejercicio</button>
     <div class="stack" style="margin-top:20px">
       <button class="btn primary block" data-action="routine-save">Guardar</button>
+      ${d.isNew || !multiGym() ? '' : `<button class="btn block" data-action="routine-duplicate">⧉ Duplicar para ${esc(gymName(currentGym()))}</button>`}
       ${d.isNew ? '' : '<button class="btn ghost danger block" data-action="routine-delete">Eliminar rutina</button>'}
     </div>`;
 }
@@ -450,7 +566,8 @@ function saveRoutine() {
   const d = draft;
   d.name = d.name.trim();
   if (!d.name) { toast('Ponle un nombre a la rutina'); return; }
-  d.exercises.forEach((e) => { if (e.note != null) setNote(e.name, e.note); });
+  d.gymId = d.gymId || null;
+  d.exercises.forEach((e) => { if (e.note != null) setNote(e.name, e.note, draftNoteGym()); });
   d.exercises = d.exercises
     .filter((e) => String(e.name).trim())
     .map((e) => ({
@@ -526,7 +643,7 @@ function workoutDetail(w) {
     </div>
     <div class="muted small" style="margin-bottom:8px">${fmtTime(w.start)}${w.end ? ' · ' + fmtDuration(w.end - w.start) : ''}</div>
     ${w.exercises.map((e) => {
-      const best = bestWeightFor(e.name, w.start);
+      const best = bestWeightFor(e.name, w.start, w.gymId);
       const pr = best != null && e.sets.some((s) => num(s.w) != null && num(s.w) > best);
       return `<div class="log-ex">
         <div class="name">${esc(e.name)}${pr ? '<span class="pr-badge">RÉCORD</span>' : ''}</div>
@@ -580,7 +697,7 @@ function renderExerciseResults() {
         <h3>${esc(e.name)}</h3>
         <div class="muted small">${e.sessions
           ? `${e.sessions} ${e.sessions === 1 ? 'vez' : 'veces'}${e.best != null ? ` · máx ${e.best} kg` : ''} · ${esc(fmtDate(e.last, { day: 'numeric', month: 'short' }))}`
-          : 'Sin historial aún'}${e.note ? ' · 📝' : ''}</div>
+          : 'Sin historial aún'}${hasAnyNote(e) ? ' · 📝' : ''}</div>
       </div>
       <span class="muted">›</span>
     </div>`).join('');
@@ -593,13 +710,16 @@ function openExercise(name) {
   const items = sortedWorkouts()
     .map((w) => ({ w, ex: w.exercises.find((e) => norm(e.name) === n) }))
     .filter((x) => x.ex);
-  const best = bestWeightFor(name);
+  // Máximo por gimnasio (las máquinas de cada uno no son comparables)
+  const bests = db.gyms.map((g) => ({ g, best: bestWeightFor(name, Infinity, g.id) })).filter((x) => x.best != null);
+  const otherNotes = db.gyms.filter((g) => g.id !== currentGym() && getNote(name, g.id));
   const inUse = db.routines.filter((r) => r.exercises.some((e) => norm(e.name) === n)).map((r) => r.name);
   const restOpts = `<option value="">Por defecto (${fmtClock(db.settings.defaultRest)})</option>` +
     REST_OPTIONS.map((v) => `<option value="${v}" ${v === lib.rest ? 'selected' : ''}>${fmtClock(v)}</option>`).join('');
 
   openSheet(`<h2>${esc(name)}</h2>
     ${noteBox(name)}
+    ${otherNotes.map((g) => `<div class="other-note"><b>${esc(g.name)}:</b> ${esc(getNote(name, g.id))}</div>`).join('')}
     <div class="grid2">
       <div><label class="field-label">Descanso</label><select data-pref="rest" data-name="${esc(name)}">${restOpts}</select></div>
       <div><label class="field-label">Reps objetivo</label><input inputmode="numeric" data-pref="reps" data-name="${esc(name)}" value="${esc(lib.reps || '')}" placeholder="—"></div>
@@ -610,11 +730,13 @@ function openExercise(name) {
       <button class="btn sm grow" data-action="ex-merge" data-name="${esc(name)}">🔗 Fusionar</button>
       ${!items.length && !inUse.length ? `<button class="btn sm ghost danger" data-action="ex-delete" data-name="${esc(name)}">🗑</button>` : ''}
     </div>
-    ${best != null ? `<div class="card" style="margin-top:14px"><div class="muted small">Peso máximo</div><div style="font-size:26px;font-weight:800">${best} kg</div></div>` : ''}
+    ${bests.length ? `<div class="card best-card" style="margin-top:14px">
+      ${bests.map(({ g, best }) => `<div><div class="muted small">Peso máximo${multiGym() ? ` · ${esc(g.name)}` : ''}</div><div class="big-num">${best} kg</div></div>`).join('')}
+    </div>` : ''}
     <div class="section-title">Historial</div>
     ${items.length ? `<div class="card">${items.slice(0, 50).map(({ w, ex }) => `
       <div class="history-item">
-        <div class="row between"><b>${esc(fmtDate(w.start, { day: 'numeric', month: 'short', year: 'numeric' }))}</b><span class="muted small">${esc(w.name)}</span></div>
+        <div class="row between"><b>${esc(fmtDate(w.start, { day: 'numeric', month: 'short', year: 'numeric' }))}</b><span class="muted small">${multiGym() ? `${PIN}${esc(gymName(w.gymId))} · ` : ''}${esc(w.name)}</span></div>
         <div class="muted small" style="margin-top:2px">${ex.sets.map(fmtSet).map(esc).join(' · ')}</div>
       </div>`).join('')}</div>` : '<div class="empty">Aún no hay historial de este ejercicio.</div>'}`, 'exercise', name);
 }
@@ -1097,6 +1219,28 @@ document.addEventListener('click', (e) => {
       break;
     }
     case 'routine-save': saveRoutine(); break;
+    case 'routine-duplicate': duplicateRoutine(); break;
+
+    // Gimnasios
+    case 'gym-menu': openGymMenu(); break;
+    case 'gym-select': selectGym(el.dataset.id); break;
+    case 'gym-add': addGym(); break;
+    case 'gym-rename': {
+      const g = db.gyms.find((x) => x.id === el.dataset.id);
+      const name = (prompt('Nombre del gimnasio:', g.name) || '').trim();
+      if (!name) return;
+      g.name = name; save(); render(); openGymMenu();
+      break;
+    }
+    case 'gym-delete': {
+      const g = db.gyms.find((x) => x.id === el.dataset.id);
+      if (!confirm(`¿Borrar “${g.name}”?`)) return;
+      db.gyms = db.gyms.filter((x) => x.id !== g.id);
+      Object.values(db.library).forEach((e) => { if (e.notes) delete e.notes[g.id]; });
+      if (currentGym() === g.id) db.settings.currentGym = db.gyms[0].id;
+      save(); render(); openGymMenu();
+      break;
+    }
     case 'routine-delete':
       if (confirm(`¿Eliminar la rutina “${draft.name}”? El historial de entrenos no se borra.`)) {
         db.routines = db.routines.filter((r) => r.id !== draft.id);
@@ -1164,6 +1308,7 @@ function addExerciseFromInput() {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.target.id === 'new-ex') { e.preventDefault(); addExerciseFromInput(); }
+  if (e.key === 'Enter' && e.target.id === 'new-gym') { e.preventDefault(); addGym(); }
 });
 
 document.addEventListener('input', (e) => {
@@ -1202,6 +1347,11 @@ document.addEventListener('change', (e) => {
     save();
     render();
     toast('Guardado');
+  } else if (t.dataset.rfield === 'gymId' && draft) {
+    // Cambia de gimnasio la rutina: las notas que se ven pasan a ser las de ese gimnasio
+    draft.gymId = t.value || null;
+    loadDraftNotes();
+    rerenderEditor();
   } else if (t.dataset.efield === 'name' && draft) {
     // En el editor de rutinas: si el ejercicio ya se conoce, trae sus valores
     const ex = draft.exercises[+t.dataset.i];
@@ -1210,7 +1360,7 @@ document.addEventListener('change', (e) => {
       ex.name = lib.name;
       if (lib.rest) ex.rest = lib.rest;
       if (lib.reps) ex.reps = lib.reps;
-      ex.note = lib.note || ex.note || '';
+      ex.note = getNote(lib.name, draftNoteGym()) || ex.note || '';
       rerenderEditor();
     }
   } else if (t.dataset.setting) {

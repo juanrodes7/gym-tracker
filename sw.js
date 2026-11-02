@@ -1,6 +1,6 @@
 // Service worker: guarda la app en caché para que funcione sin conexión.
 // Sube la versión cada vez que cambies algún archivo para que los móviles se actualicen.
-const CACHE = 'gym-v5';
+const CACHE = 'gym-v6';
 const FILES = [
   './',
   './index.html',
@@ -9,6 +9,7 @@ const FILES = [
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './icons/icon-maskable-512.png',
   './icons/apple-touch-icon.png',
 ];
 
