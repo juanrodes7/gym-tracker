@@ -4,7 +4,7 @@
    Gym Tracker — PWA local. Todos los datos viven en localStorage.
    ============================================================ */
 
-const APP_VERSION = 10; // súbela junto con CACHE en sw.js
+const APP_VERSION = 11; // súbela junto con CACHE en sw.js
 const STORE_KEY = 'gymtracker.v1';
 const TIMER_KEY = 'gymtracker.timer';
 
@@ -33,7 +33,8 @@ const fmtDate = (ts, opts = { weekday: 'long', day: 'numeric', month: 'long' }) 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const fmtTime =(ts) => new Date(ts).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-/* Correr: una carrera es { type: 'run', name: 'Correr', km, time, comment } (time como texto "28:30") */
+/* Correr (en cinta): { type: 'run', name: 'Correr', time, incline, program } — time como texto ("30" o "28:30").
+   Las carreras antiguas pueden traer km/comment: se siguen mostrando. */
 const RUN_NAME = 'Correr';
 const RUN_ICON = '<svg class="run-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="15" cy="4.5" r="1.8"/><path d="M7 21l3.5-5.5 3 2.5v3"/><path d="M5 11.5l3.5-3 4.5 1 2.5 3.5 3.5 1"/><path d="M10.5 15.5l2.5-6"/></svg>';
 const isRun = (e) => !!e && e.type === 'run';
@@ -50,13 +51,19 @@ function fmtDur(sec) {
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), ss = Math.round(sec % 60);
   return h ? `${h}:${pad(m)}:${pad(ss)}` : `${m}:${pad(ss)}`;
 }
-function runPace(e) { const km = num(e.km), sec = parseDur(e.time); return km > 0 && sec ? sec / km : null; }
 function fmtRun(e) {
-  const km = num(e.km), sec = parseDur(e.time), pace = runPace(e);
-  return [km ? `${String(km).replace('.', ',')} km` : '', sec ? fmtDur(sec) : '', pace ? `${fmtClock(pace)} /km` : ''].filter(Boolean).join(' · ');
+  const sec = parseDur(e.time), inc = num(e.incline), km = num(e.km);
+  return [
+    sec ? fmtMin(sec) : '',
+    inc != null && String(e.incline).trim() !== '' ? `incl. ${String(inc).replace('.', ',')}%` : '',
+    (e.program || '').trim(),
+    km ? `${String(km).replace('.', ',')} km` : '',
+  ].filter(Boolean).join(' · ');
 }
-const hasRunData = (e) => num(e.km) > 0 || !!parseDur(e.time);
-const newRun = () => ({ type: 'run', name: RUN_NAME, km: '', time: '', comment: '' });
+// 1800 s → "30 min" · 1710 s → "28:30 min"
+const fmtMin = (sec) => (sec % 60 ? `${fmtDur(sec)} min` : sec >= 3600 ? fmtDur(sec) : `${sec / 60} min`);
+const hasRunData = (e) => !!parseDur(e.time) || String(e.incline || '').trim() !== '' || !!(e.program || '').trim() || num(e.km) > 0;
+const newRun = () => ({ type: 'run', name: RUN_NAME, time: '', incline: '', program: '' });
 function lastRun(beforeTs = Infinity) {
   for (const w of sortedWorkouts()) {
     if (w.start >= beforeTs) continue;
@@ -348,7 +355,7 @@ function renderHoy() {
     html += `<div class="muted small" style="margin:-4px 4px 12px">${hidden} ${hidden === 1 ? 'rutina oculta' : 'rutinas ocultas'} de otros gimnasios</div>`;
   }
   html += `<div class="card routine-card run-routine">
-      <div class="info"><h3>${RUN_ICON} Correr</h3><p>${(() => { const r = lastRun(); return r ? `Última: ${esc(fmtRun(r.run))}` : 'Apunta distancia, tiempo y cómo ha ido'; })()}</p></div>
+      <div class="info"><h3>${RUN_ICON} Correr</h3><p>${(() => { const r = lastRun(); return r ? `Última: ${esc(fmtRun(r.run))}` : 'Cinta: tiempo, inclinación y programa'; })()}</p></div>
       <button class="btn primary sm" data-action="start-run">Empezar</button>
     </div>
     <button class="btn block" data-action="start-free">＋ Entreno libre</button>`;
@@ -499,7 +506,6 @@ function renderActive() {
 
 function runCard(ex, ei, beforeTs) {
   const prev = lastRun(beforeTs);
-  const pace = runPace(ex);
   return `<div class="card ex-card run-card">
     <div class="ex-head">
       <div class="grow">
@@ -509,13 +515,13 @@ function runCard(ex, ei, beforeTs) {
       <button class="icon-btn" data-action="remove-ex" data-ei="${ei}" aria-label="Quitar">✕</button>
     </div>
     <div class="run-grid">
-      <div><label class="field-label">Distancia (km)</label>
-        <input inputmode="decimal" data-run="km" data-ei="${ei}" value="${esc(ex.km)}" placeholder="${esc(prev?.run.km || '5')}"></div>
-      <div><label class="field-label">Tiempo (mm:ss)</label>
-        <input inputmode="text" data-run="time" data-ei="${ei}" value="${esc(ex.time)}" placeholder="${esc(prev?.run.time || '30:00')}"></div>
+      <div><label class="field-label">Tiempo (min)</label>
+        <input inputmode="decimal" data-run="time" data-ei="${ei}" value="${esc(ex.time || '')}" placeholder="${esc(prev?.run.time || '30')}"></div>
+      <div><label class="field-label">Inclinación (%)</label>
+        <input inputmode="decimal" data-run="incline" data-ei="${ei}" value="${esc(ex.incline || '')}" placeholder="${esc(prev?.run.incline || '—')}"></div>
     </div>
-    <div class="run-pace" id="pace-${ei}">${pace ? `Ritmo ${fmtClock(pace)} /km` : ''}</div>
-    <textarea class="ex-note" rows="1" data-run="comment" data-ei="${ei}" placeholder="Comentario: ruta, sensaciones, series…">${esc(ex.comment || '')}</textarea>
+    <label class="field-label" style="margin-top:10px">Programa</label>
+    <input class="run-program" data-run="program" data-ei="${ei}" value="${esc(ex.program || '')}" placeholder="${esc(prev?.run.program || 'Ej: Intervalos, Colinas 3, manual…')}" autocomplete="off">
   </div>`;
 }
 
@@ -551,7 +557,7 @@ function finishWorkout() {
   const a = db.active;
   const exercises = a.exercises
     .map((e) => (isRun(e)
-      ? { type: 'run', name: e.name, km: e.km, time: e.time, comment: (e.comment || '').trim() }
+      ? { type: 'run', name: e.name, time: e.time || '', incline: e.incline || '', program: (e.program || '').trim() }
       : { name: e.name, sets: e.sets.filter((s) => s.done).map((s) => ({ w: s.w, r: s.r })) }))
     .filter((e) => (isRun(e) ? hasRunData(e) : e.sets.length));
   if (!exercises.length) {
@@ -860,16 +866,15 @@ function openExercise(name) {
 function openRunHistory() {
   const runs = sortedWorkouts().flatMap((w) => w.exercises.filter(isRun).map((r) => ({ w, r })));
   const now = new Date();
-  const monthKm = runs.filter(({ w }) => { const d = new Date(w.start); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); })
-    .reduce((a, { r }) => a + (num(r.km) || 0), 0);
-  const paces = runs.map(({ r }) => runPace(r)).filter(Boolean);
-  const longest = Math.max(0, ...runs.map(({ r }) => num(r.km) || 0));
+  const monthRuns = runs.filter(({ w }) => { const d = new Date(w.start); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); });
+  const monthMin = Math.round(monthRuns.reduce((a, { r }) => a + (parseDur(r.time) || 0), 0) / 60);
+  const longest = Math.max(0, ...runs.map(({ r }) => parseDur(r.time) || 0));
   const fmtNum = (n) => String(Math.round(n * 10) / 10).replace('.', ',');
   openSheet(`<h2>${RUN_ICON} Correr</h2>
     ${runs.length ? `<div class="card best-card">
-      <div><div class="muted small">Km este mes</div><div class="big-num">${fmtNum(monthKm)}</div></div>
-      <div><div class="muted small">Más larga</div><div class="big-num">${fmtNum(longest)} km</div></div>
-      ${paces.length ? `<div><div class="muted small">Mejor ritmo</div><div class="big-num">${fmtClock(Math.min(...paces))}</div></div>` : ''}
+      <div><div class="muted small">Este mes</div><div class="big-num">${monthMin} min</div></div>
+      <div><div class="muted small">Veces este mes</div><div class="big-num">${monthRuns.length}</div></div>
+      <div><div class="muted small">Más larga</div><div class="big-num">${longest ? fmtMin(longest) : '—'}</div></div>
     </div>
     <div class="section-title">Historial</div>
     <div class="card">${runs.slice(0, 60).map(({ w, r }) => `
@@ -1522,10 +1527,8 @@ document.addEventListener('input', (e) => {
     save();
   } else if (t.dataset.run && db.active) {
     const ex = db.active.exercises[+t.dataset.ei];
-    ex[t.dataset.run] = t.dataset.run === 'comment' ? t.value : t.value.trim();
+    ex[t.dataset.run] = t.dataset.run === 'program' ? t.value : t.value.trim();
     save();
-    const pace = runPace(ex), el = $(`#pace-${t.dataset.ei}`);
-    if (el) el.textContent = pace ? `Ritmo ${fmtClock(pace)} /km` : '';
   } else if (t.dataset.field && db.active) {
     db.active.exercises[+t.dataset.ei].sets[+t.dataset.si][t.dataset.field] = t.value.trim();
     save();
