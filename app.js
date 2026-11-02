@@ -4,7 +4,7 @@
    Gym Tracker — PWA local. Todos los datos viven en localStorage.
    ============================================================ */
 
-const APP_VERSION = 11; // súbela junto con CACHE en sw.js
+const APP_VERSION = 12; // súbela junto con CACHE en sw.js
 const STORE_KEY = 'gymtracker.v1';
 const TIMER_KEY = 'gymtracker.timer';
 
@@ -935,7 +935,7 @@ function renderAjustes() {
         <option value="true" ${s.sound ? 'selected' : ''}>Sí</option><option value="false" ${!s.sound ? 'selected' : ''}>No</option></select></div>
       <div class="row between"><span>Vibración <span class="muted small">(Android)</span></span><select data-setting="vibrate" style="width:110px">
         <option value="true" ${s.vibrate ? 'selected' : ''}>Sí</option><option value="false" ${!s.vibrate ? 'selected' : ''}>No</option></select></div>
-      <button class="btn sm" data-action="test-sound">🔔 Probar sonido</button>
+      <div class="row"><button class="btn sm grow" data-action="test-sound">🔔 Probar sonido</button><button class="btn sm grow" data-action="test-vibrate">📳 Probar vibración</button></div>
     </div>
 
     <div class="section-title">Avisos con la app cerrada</div>
@@ -1480,9 +1480,14 @@ document.addEventListener('click', (e) => {
       unlockAudio();
       const prev = db.settings.sound;
       db.settings.sound = true; beep(); db.settings.sound = prev;
-      if (navigator.vibrate) navigator.vibrate(200);
       break;
     }
+    case 'test-vibrate':
+      // navigator.vibrate devuelve false si el navegador/sistema la bloquea
+      if (!navigator.vibrate) { alert('Este navegador no permite vibrar (en iPhone las apps web no pueden vibrar).'); break; }
+      if (navigator.vibrate([300, 150, 300, 150, 300])) toast('Vibración enviada: si no la notas, la está bloqueando Android');
+      else alert('Android/Chrome ha bloqueado la vibración. Revisa en los ajustes del móvil que la vibración táctil esté activada.');
+      break;
     case 'push-on': enablePush(); break;
     case 'push-off': disablePush(); break;
     case 'push-test':
