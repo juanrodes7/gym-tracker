@@ -1,6 +1,6 @@
 // Service worker: guarda la app en caché para que funcione sin conexión.
 // Sube la versión cada vez que cambies algún archivo para que los móviles se actualicen.
-const CACHE = 'gym-v3';
+const CACHE = 'gym-v4';
 const FILES = [
   './',
   './index.html',
@@ -36,4 +36,29 @@ self.addEventListener('fetch', (e) => {
       })
       .catch(() => caches.match(e.request, { ignoreSearch: true }))
   );
+});
+
+// Aviso de fin de descanso enviado por el servidor (llega aunque la app esté cerrada)
+self.addEventListener('push', (e) => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch {}
+  e.waitUntil(self.registration.showNotification(data.title || '⏱ ¡Descanso terminado!', {
+    body: data.body || 'A por la siguiente serie 💪',
+    icon: 'icons/icon-192.png',
+    badge: 'icons/icon-192.png',
+    tag: 'rest-timer',
+    renotify: true,
+    requireInteraction: false,
+    vibrate: [300, 150, 300, 150, 300],
+  }));
+});
+
+// Al tocar la notificación, vuelve a la app
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (all.length) return all[0].focus();
+    return self.clients.openWindow('./');
+  })());
 });

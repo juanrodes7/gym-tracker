@@ -637,6 +637,24 @@ function afterExerciseChange(name) {
 
 /* ---------- Vista: ajustes ---------- */
 
+function renderPushSettings() {
+  const st = pushStatus();
+  if (st === 'on') {
+    return `<div class="row between"><span>🔔 Activados</span><span class="muted small">en este móvil</span></div>
+      <div class="muted small">Cuando acabe el descanso te llegará una notificación aunque hayas salido de la app o bloqueado el móvil.</div>
+      <button class="btn sm" data-action="push-test">Probar: aviso en 10 s</button>
+      <button class="btn sm ghost" data-action="push-off">Desactivar</button>`;
+  }
+  const msg = {
+    'needs-install': 'Para recibir avisos en iPhone, primero instala la app: en Safari → Compartir → “Añadir a pantalla de inicio”, y ábrela desde el icono.',
+    unsupported: 'Este navegador no permite avisos. En Android usa Chrome; en iPhone, la app instalada (iOS 16.4 o superior).',
+    denied: 'Has bloqueado las notificaciones. Actívalas en los ajustes del móvil (Notificaciones → Gym) y vuelve aquí.',
+    off: 'Recibe una notificación al terminar el descanso aunque no estés en la app o tengas el móvil bloqueado.',
+  }[st];
+  return `<div class="muted small">${msg}</div>
+    ${st === 'off' ? '<button class="btn primary block" data-action="push-on">🔔 Activar avisos</button>' : ''}`;
+}
+
 function renderAjustes() {
   $('#title').textContent = 'Ajustes';
   const s = db.settings;
@@ -652,6 +670,9 @@ function renderAjustes() {
         <option value="true" ${s.vibrate ? 'selected' : ''}>Sí</option><option value="false" ${!s.vibrate ? 'selected' : ''}>No</option></select></div>
       <button class="btn sm" data-action="test-sound">🔔 Probar sonido</button>
     </div>
+
+    <div class="section-title">Avisos con la app cerrada</div>
+    <div class="card stack">${renderPushSettings()}</div>
 
     <div class="section-title">Copia de seguridad</div>
     <div class="card stack">
@@ -767,24 +788,118 @@ function beep() {
   });
 }
 
-function startTimer(sec) {
+function startTimer(sec, label) {
   unlockAudio();
-  timer = { end: Date.now() + sec * 1000, dur: sec, fired: false };
+  timer = { end: Date.now() + sec * 1000, dur: sec, fired: false, label: label || '' };
+  timer.pushed = schedulePush(timer.end, timer.label);
   localStorage.setItem(TIMER_KEY, JSON.stringify(timer));
   tick();
 }
 function addTimer(sec) {
   if (!timer) return;
-  if (timer.fired) { startTimer(Math.max(15, sec)); return; }
+  if (timer.fired) { startTimer(Math.max(15, sec), timer.label); return; }
   timer.end += sec * 1000;
   timer.dur = Math.max(1, timer.dur + sec);
+  timer.pushed = schedulePush(timer.end, timer.label);
   localStorage.setItem(TIMER_KEY, JSON.stringify(timer));
   tick();
 }
 function stopTimer() {
+  if (timer && timer.pushed && !timer.fired) cancelPush();
   timer = null;
   localStorage.removeItem(TIMER_KEY);
   tick();
+}
+
+/* ---------- Avisos push (suenan con la app cerrada) ---------- */
+
+const PUSH_URL = 'https://gym-tracker-push.juanrodes7.workers.dev';
+const VAPID_PUBLIC_KEY = 'BKaCCZ984cWkVhCF_bTTnP-HHsCpvcDRK2w5Mgsd44FlRqNFJw8Aex58YgLERArBPeYzqLhZRS7lg-uZGz9wwf8';
+const PUSH_KEY = 'gymtracker.push'; // { id, sub } — propio de cada móvil, no va en la copia de seguridad
+
+let push = (() => { try { return JSON.parse(localStorage.getItem(PUSH_KEY)); } catch { return null; } })();
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+function pushStatus() {
+  if (push && pushSupported() && Notification.permission === 'granted') return 'on';
+  if (!pushSupported()) return isIOS() && !isStandalone() ? 'needs-install' : 'unsupported';
+  if (Notification.permission === 'denied') return 'denied';
+  return 'off';
+}
+
+function postPush(path, data) {
+  return fetch(PUSH_URL + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+    keepalive: true,
+  });
+}
+
+// Devuelve true si se ha programado el aviso en el servidor
+function schedulePush(at, label, title) {
+  if (pushStatus() !== 'on') return false;
+  postPush('/schedule', {
+    id: push.id,
+    subscription: push.sub,
+    at,
+    title: title || '⏱ ¡Descanso terminado!',
+    body: label ? `Siguiente serie: ${label}` : 'A por la siguiente serie 💪',
+  }).catch(() => {});
+  return true;
+}
+
+function cancelPush() {
+  if (!push) return;
+  postPush('/cancel', { id: push.id }).catch(() => {});
+}
+
+function vapidKeyBytes() {
+  const s = VAPID_PUBLIC_KEY.replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(atob(s + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+}
+
+async function enablePush() {
+  const st = pushStatus();
+  if (st === 'needs-install') { toast('Primero instálala: Compartir → Añadir a pantalla de inicio'); return; }
+  if (st === 'unsupported') { toast('Este navegador no permite avisos'); return; }
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { toast('Sin permiso no puedo avisarte'); render(); return; }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = (await reg.pushManager.getSubscription()) ||
+      (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidKeyBytes() }));
+    push = { id: push?.id || uid(), sub: sub.toJSON() };
+    localStorage.setItem(PUSH_KEY, JSON.stringify(push));
+    toast('Avisos activados 🔔');
+  } catch (e) {
+    console.error(e);
+    toast('No se pudieron activar los avisos');
+  }
+  render();
+}
+
+async function disablePush() {
+  cancelPush();
+  try { const reg = await navigator.serviceWorker.ready; await (await reg.pushManager.getSubscription())?.unsubscribe(); } catch {}
+  push = null;
+  localStorage.removeItem(PUSH_KEY);
+  render();
+  toast('Avisos desactivados');
+}
+
+// Si el navegador renovó la suscripción, la actualizamos
+async function refreshPushSubscription() {
+  if (!push || !pushSupported()) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) { push = null; localStorage.removeItem(PUSH_KEY); return; }
+    const json = sub.toJSON();
+    if (json.endpoint !== push.sub.endpoint) { push.sub = json; localStorage.setItem(PUSH_KEY, JSON.stringify(push)); }
+  } catch {}
 }
 
 function tick() {
@@ -792,11 +907,18 @@ function tick() {
   if (!timer) { bar.classList.add('hidden'); bar.classList.remove('finished'); updateFab(); return; }
   const remaining = (timer.end - Date.now()) / 1000;
   bar.classList.remove('hidden');
+  // Con la app delante avisa ella misma: cancela el push justo antes para no duplicar
+  if (timer.pushed && !timer.fired && remaining <= 1.5 && remaining > 0 && document.visibilityState === 'visible') {
+    timer.pushed = false;
+    localStorage.setItem(TIMER_KEY, JSON.stringify(timer));
+    cancelPush();
+  }
   if (remaining <= 0) {
     if (!timer.fired) {
       timer.fired = true;
       localStorage.setItem(TIMER_KEY, JSON.stringify(timer));
-      if (remaining > -30) {
+      // Si el aviso push ya sonó (app en segundo plano), no volvemos a pitar al abrirla
+      if (remaining > -30 && !timer.pushed) {
         beep();
         if (db.settings.vibrate && navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]);
       }
@@ -877,7 +999,8 @@ document.addEventListener('click', (e) => {
         if (s.r === '' && rIn.placeholder !== '—') s.r = rIn.placeholder;
         if (s.r === '') { toast('Apunta las repeticiones'); rIn.focus(); return; }
         s.done = true;
-        startTimer(ex.rest || db.settings.defaultRest);
+        const nextSet = ex.sets.findIndex((x) => !x.done);
+        startTimer(ex.rest || db.settings.defaultRest, nextSet >= 0 ? `${ex.name} (${nextSet + 1}ª)` : '');
       } else {
         s.done = false;
       }
@@ -1002,6 +1125,11 @@ document.addEventListener('click', (e) => {
       if (navigator.vibrate) navigator.vibrate(200);
       break;
     }
+    case 'push-on': enablePush(); break;
+    case 'push-off': disablePush(); break;
+    case 'push-test':
+      if (schedulePush(Date.now() + 10000, '', '🔔 ¡Funciona!')) toast('Sal de la app o bloquea el móvil… llega en 10 s');
+      break;
     case 'export': exportData(); break;
     case 'import': $('#import-file').click(); break;
     case 'reset':
@@ -1098,5 +1226,5 @@ tick();
 if (db.active) requestWakeLock();
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  navigator.serviceWorker.register('sw.js').then(refreshPushSubscription).catch(() => {});
 }

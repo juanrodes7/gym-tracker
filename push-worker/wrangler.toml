@@ -1,0 +1,16 @@
+name = "gym-tracker-push"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+VAPID_PUBLIC_KEY = "BKaCCZ984cWkVhCF_bTTnP-HHsCpvcDRK2w5Mgsd44FlRqNFJw8Aex58YgLERArBPeYzqLhZRS7lg-uZGz9wwf8"
+VAPID_SUBJECT = "https://juanrodes7.github.io/gym-tracker/"
+# VAPID_PRIVATE_JWK se guarda como secreto: npx wrangler secret put VAPID_PRIVATE_JWK
+
+[[durable_objects.bindings]]
+name = "TIMERS"
+class_name = "RestTimer"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RestTimer"]
