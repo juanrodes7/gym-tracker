@@ -4,7 +4,7 @@
    Gym Tracker — PWA local. Todos los datos viven en localStorage.
    ============================================================ */
 
-const APP_VERSION = 6; // súbela junto con CACHE en sw.js
+const APP_VERSION = 7; // súbela junto con CACHE en sw.js
 const STORE_KEY = 'gymtracker.v1';
 const TIMER_KEY = 'gymtracker.timer';
 

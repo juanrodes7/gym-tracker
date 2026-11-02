@@ -18,6 +18,10 @@
   --ok-soft: #e7f0e0;
   --danger: #c4776f;       /* rosa palo */
   --gold: #e6c98b;
+  --on-accent: #ffffff;    /* texto sobre verde */
+  --on-brown: #ffffff;     /* texto sobre marrón */
+  --note-text: var(--text);
+  --chip-text: var(--text);
   --shadow: 0 1px 2px rgba(80, 60, 40, 0.05), 0 4px 14px rgba(80, 60, 40, 0.05);
   --radius: 18px;
   --tabbar-h: 58px;
@@ -27,25 +31,32 @@
 }
 
 @media (prefers-color-scheme: dark) {
+  /* Paleta "Grafito": gris casi negro neutro (como iOS) y el color solo en los detalles.
+     Los pastel llevan texto oscuro encima para que se lean bien. */
   :root {
-    --bg: #1c1916;
-    --card: #26221e;
-    --card2: #312c27;
-    --line: #3a342e;
-    --text: #f1ebe3;
-    --muted: #a1958a;
-    --accent: #93b38b;
-    --accent-strong: #a5c49d;
-    --accent-soft: #2e3a2b;
-    --brown: #c4a385;
-    --brown-soft: #3a3029;
-    --ok: #93b38b;
-    --ok-soft: #2b3628;
-    --danger: #d98b83;
+    --bg: #0e0e0d;
+    --card: #1c1b1a;
+    --card2: #2a2927;
+    --line: #34322f;
+    --text: #f3f0eb;
+    --muted: #9e9a93;
+    --accent: #a8c69e;
+    --accent-strong: #b6d2ac;
+    --accent-soft: rgba(168, 198, 158, 0.14);
+    --brown: #d8bc9b;
+    --brown-soft: rgba(216, 188, 155, 0.13);
+    --ok: #a8c69e;
+    --ok-soft: rgba(168, 198, 158, 0.14);
+    --danger: #e0958c;
     --gold: #d9bb7c;
+    --on-accent: #17210f;
+    --on-brown: #2a1d10;
+    --note-text: #e8d6c2;
+    --chip-text: #d8bc9b;
     --shadow: none;
     color-scheme: dark;
   }
+  input::placeholder, textarea::placeholder { color: #6f6b65; }
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -151,8 +162,8 @@ main {
   transition: transform 0.1s ease, opacity 0.1s ease;
 }
 .btn:active { transform: scale(0.97); opacity: 0.85; }
-.btn.primary { background: var(--accent); color: #fff; box-shadow: none; }
-.btn.ok { background: var(--accent); color: #fff; box-shadow: none; }
+.btn.primary { background: var(--accent); color: var(--on-accent); box-shadow: none; }
+.btn.ok { background: var(--accent); color: var(--on-accent); box-shadow: none; }
 .btn.danger { color: var(--danger); }
 .btn.ghost { background: none; box-shadow: none; color: var(--muted); }
 .btn.ghost.danger { color: var(--danger); }
@@ -192,14 +203,14 @@ main {
 }
 .set-row .check:active { transform: scale(0.9); }
 .set-row.done { background: var(--ok-soft); }
-.set-row.done .check { background: var(--ok); color: #fff; }
+.set-row.done .check { background: var(--ok); color: var(--on-accent); }
 .set-row.done input { background: transparent; }
 .ex-actions { display: flex; gap: 6px; margin-top: 10px; }
 .ex-actions .btn { flex: 1; }
 
 .ex-note {
   display: block; width: 100%; resize: none; overflow: hidden;
-  font-size: 14.5px; line-height: 1.4; color: var(--text);
+  font-size: 14.5px; line-height: 1.4; color: var(--note-text);
   background: var(--brown-soft); border: 0;
   border-radius: 12px; padding: 9px 12px; margin: 0 0 12px; outline: none;
 }
@@ -229,7 +240,7 @@ main {
 .gym-chip {
   display: inline-flex; align-items: center; gap: 6px; margin: 2px 0 14px;
   padding: 7px 14px; border-radius: 999px;
-  background: var(--brown-soft); color: var(--text);
+  background: var(--brown-soft); color: var(--chip-text);
   font-weight: 600; font-size: 14.5px;
 }
 .pin { width: 1.05em; height: 1.05em; vertical-align: -0.17em; margin-right: 3px; color: var(--brown); flex: none; }
@@ -252,7 +263,7 @@ main {
 }
 .cal-day.out { visibility: hidden; }
 .cal-day.today { color: var(--accent-strong); font-weight: 700; box-shadow: inset 0 0 0 1.5px var(--accent); }
-.cal-day.has { background: var(--accent); color: #fff; font-weight: 600; }
+.cal-day.has { background: var(--accent); color: var(--on-accent); font-weight: 600; }
 .cal-day .dot { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: 0.8; }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
 .stat { background: var(--card); border-radius: var(--radius); padding: 14px 8px; text-align: center; box-shadow: var(--shadow); }
@@ -283,7 +294,7 @@ main {
   box-shadow: 0 10px 30px rgba(70, 50, 30, 0.16);
 }
 .timerbar.finished { background: var(--accent); animation: pulse 0.6s ease-in-out 4; }
-.timerbar.finished .timer-label, .timerbar.finished .tbtn, .timerbar.finished .timer-time { color: #fff; }
+.timerbar.finished .timer-label, .timerbar.finished .tbtn, .timerbar.finished .timer-time { color: var(--on-accent); }
 .timerbar.finished .tbtn { background: rgba(255, 255, 255, 0.2); }
 @keyframes pulse { 50% { transform: scale(1.03); } }
 .timer-display { flex: 1; text-align: center; }
@@ -291,7 +302,7 @@ main {
 .timer-time { font-size: 32px; font-weight: 300; font-variant-numeric: tabular-nums; line-height: 1.1; letter-spacing: -0.02em; }
 .timer-progress { height: 4px; background: var(--card2); border-radius: 2px; margin-top: 6px; overflow: hidden; }
 #timer-fill { height: 100%; width: 0; background: var(--accent); border-radius: 2px; transition: width 0.25s linear; }
-.timerbar.finished #timer-fill { background: #fff; }
+.timerbar.finished #timer-fill { background: var(--on-accent); }
 .tbtn {
   min-width: 48px; height: 48px; border-radius: 50%; background: var(--card2);
   font-weight: 600; font-size: 14px; font-variant-numeric: tabular-nums;
@@ -302,7 +313,7 @@ main {
   position: fixed; z-index: 24; right: 18px;
   bottom: calc(var(--tabbar-h) + var(--safe-b) + 16px);
   width: 56px; height: 56px; border-radius: 50%;
-  background: var(--brown); color: #fff;
+  background: var(--brown); color: var(--on-brown);
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 8px 22px rgba(120, 85, 55, 0.3);
 }
